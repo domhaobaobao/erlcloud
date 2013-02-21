@@ -41,8 +41,8 @@
           spot_price::string(),
           instance_count=1::pos_integer(),
           type=one_time::one_time|persistent,
-          valid_from::datetime(),
-          valid_until::datetime(),
+          valid_from::calendar:datetime(),
+          valid_until::calendar:datetime(),
           launch_group::string(),
           availability_zone_group::string(),
           launch_specification::#ec2_instance_spec{}

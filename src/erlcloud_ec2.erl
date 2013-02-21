@@ -1113,7 +1113,12 @@ extract_instance_status(Node) ->
     [ { instance_id, get_text("instanceId", Node) },
       { availability_zone, get_text("availabilityZone", Node) },
       { instance_state_code, get_text("instanceState/code", Node) },
-      { instance_state_name, get_text("instanceState/name", Node) } ].
+      { instance_state_name, get_text("instanceState/name", Node) },
+      { system_status_status, get_text("systemStatus/status", Node) },
+      { system_status_reachability, get_text("instanceState/name", Node) },
+      { instance_state_name, get_text("instanceState/name", Node) },
+      { instance_state_name, get_text("instanceState/name", Node) }
+	   ].
 
 
 -spec(describe_internet_gateways/0 :: () -> proplist()).
