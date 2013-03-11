@@ -1054,10 +1054,8 @@ extract_reservation(Node) ->
 extract_instance(Node) ->
     [{instance_id, get_text("instanceId", Node)},
      {image_id, get_text("imageId", Node)},
-     {instance_state, [
-                       {code, list_to_integer(get_text("instanceState/code", Node, "0"))},
-                       {name, get_text("instanceState/name", Node)}
-                      ]},
+     {instance_state_code, list_to_integer(get_text("instanceState/code", Node, "0"))},
+     {instance_state_name, get_text("instanceState/name", Node)},
      {private_dns_name, get_text("privateDnsName", Node)},
      {dns_name, get_text("dnsName", Node)},
      {reason, get_text("reason", Node, none)},
@@ -1115,9 +1113,9 @@ extract_instance_status(Node) ->
       { instance_state_code, get_text("instanceState/code", Node) },
       { instance_state_name, get_text("instanceState/name", Node) },
       { system_status_status, get_text("systemStatus/status", Node) },
-      { system_status_reachability, get_text("instanceState/name", Node) },
-      { instance_state_name, get_text("instanceState/name", Node) },
-      { instance_state_name, get_text("instanceState/name", Node) }
+      { system_status_reachability, get_text("systemStatus/details/item/name", Node) },
+      { instance_status_status, get_text("instanceStatus/status", Node) },
+      { instance_status_reachability, get_text("instanceStatus/details/item/name", Node) }
 	   ].
 
 
