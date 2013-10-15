@@ -433,8 +433,8 @@ authorization(Config, Headers, Body) ->
 
 signature(Config, Headers, Body) ->
     StringToSign = lists:flatten(["POST", $\n, "/", $\n, $\n, canonical(Config, Headers), $\n, Body]),
-    BytesToSign = crypto:sha(StringToSign),
-    base64:encode_to_string(binary_to_list(crypto:sha_mac(Config#aws_config.secret_access_key, BytesToSign))).
+    BytesToSign = crypto:hash(sha, StringToSign),
+    base64:encode_to_string(binary_to_list(crypto:hmac(sha, Config#aws_config.secret_access_key, BytesToSign))).
 
 canonical(Config, Headers) ->
     Headers1 = lists:map(fun({K, V}) -> {string:to_lower(K), V} end, Headers),
