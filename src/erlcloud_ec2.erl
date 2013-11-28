@@ -301,16 +301,25 @@ extract_volume_status(Node) ->
 
 %%
 %%
--spec(authorize_security_group_ingress/2 :: (string(), ec2_ingress_spec()) -> ok | {error, any()}).
-authorize_security_group_ingress(GroupName, IngressSpec) ->
-    authorize_security_group_ingress(GroupName, IngressSpec, default_config()).
+-spec(authorize_security_group_ingress/2 :: ({atom, string()}, ec2_ingress_spec()) -> ok | {error, any()}).
+authorize_security_group_ingress(GroupDetails, IngressSpec) ->
+    authorize_security_group_ingress(GroupDetails, IngressSpec, default_config()).
 
--spec(authorize_security_group_ingress/3 :: (string(), ec2_ingress_spec() | [ vpc_ingress_spec() ], aws_config()) -> ok | {error, any()}).
-authorize_security_group_ingress(GroupName, IngressSpec, Config)
+-spec(authorize_security_group_ingress/3 :: ({atom, string()}, ec2_ingress_spec() | [ vpc_ingress_spec() ], aws_config()) -> ok | {error, any()}).
+authorize_security_group_ingress({name, GroupName}, IngressSpec, Config)
   when is_list(GroupName), is_record(IngressSpec, ec2_ingress_spec) ->
     Params = [{"GroupName", GroupName}|ingress_spec_params(IngressSpec)],
     ec2_simple_query2(Config, "AuthorizeSecurityGroupIngress", Params);
-authorize_security_group_ingress(GroupID, VPCIngressSpec, Config)
+authorize_security_group_ingress({id, GroupID}, IngressSpec, Config)
+  when is_list(GroupID), is_record(IngressSpec, ec2_ingress_spec) ->
+    Params = [{"GroupID", GroupID}|ingress_spec_params(IngressSpec)],
+    ec2_simple_query2(Config, "AuthorizeSecurityGroupIngress", Params);
+    
+authorize_security_group_ingress({name, GroupName}, VPCIngressSpec, Config)
+  when is_list(GroupName), is_list(VPCIngressSpec) ->
+    Params = [{"GroupName", GroupName} | vpc_ingress_spec_to_params(VPCIngressSpec)],
+    ec2_simple_query2(Config, "AuthorizeSecurityGroupIngress", Params, ?NEW_API_VERSION);
+authorize_security_group_ingress({id, GroupID}, VPCIngressSpec, Config)
   when is_list(GroupID), is_list(VPCIngressSpec) ->
     Params = [{"GroupId", GroupID} | vpc_ingress_spec_to_params(VPCIngressSpec)],
     ec2_simple_query2(Config, "AuthorizeSecurityGroupIngress", Params, ?NEW_API_VERSION).
@@ -2308,11 +2317,11 @@ run_instances(InstanceSpec, Config)
               {"Placement.AvailabilityZone", InstanceSpec#ec2_instance_spec.availability_zone},
               {"DisableApiTermination", InstanceSpec#ec2_instance_spec.disable_api_termination},
               {"InstanceInitiatedShutdownBehavior", InstanceSpec#ec2_instance_spec.instance_initiated_shutdown_behavior},
-              {"SecurityGroupId", InstanceSpec#ec2_instance_spec.group_set},
               {"EbsOptimized", InstanceSpec#ec2_instance_spec.ebs_optimized}
              ],
+    GParams = erlcloud_aws:param_list(InstanceSpec#ec2_instance_spec.group_set, "SecurityGroupId"),
     BDParams = block_device_params(InstanceSpec#ec2_instance_spec.block_device_mapping),
-    case ec2_query2(Config, "RunInstances", Params ++ BDParams, ?NEW_API_VERSION) of
+    case ec2_query2(Config, "RunInstances", Params ++ BDParams ++ GParams, ?NEW_API_VERSION) of
         {ok, Doc} ->
             {ok, extract_reservation(hd(xmerl_xpath:string("/RunInstancesResponse", Doc)))};
         {error, _} = Error ->
