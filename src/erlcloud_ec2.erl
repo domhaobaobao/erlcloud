@@ -148,8 +148,8 @@
 
 -import(erlcloud_xml, [get_text/1, get_text/2, get_text/3, get_bool/2, get_list/2, get_integer/2]).
 
--define(API_VERSION, "2009-11-30").
--define(NEW_API_VERSION, "2012-10-01").
+-define(API_VERSION, "2013-10-15").
+-define(NEW_API_VERSION, "2013-10-15").
 -include_lib("erlcloud/include/erlcloud.hrl").
 -include_lib("erlcloud/include/erlcloud_aws.hrl").
 -include_lib("erlcloud/include/erlcloud_ec2.hrl").
@@ -1254,6 +1254,7 @@ extract_instance(Node) ->
      {private_dns_name, get_text("privateDnsName", Node)},
      {dns_name, get_text("dnsName", Node)},
      {reason, get_text("reason", Node, none)},
+     {group_set, get_list("groupSet/item/groupId", Node)},
      {key_name, get_text("keyName", Node, none)},
      {ami_launch_index, list_to_integer(get_text("amiLaunchIndex", Node, "0"))},
      {product_codes, get_list("productCodes/item/productCode", Node)},
@@ -1594,6 +1595,7 @@ describe_security_groups_filtered(Filter, Config)->
 extract_security_group(Node) ->
     [
      {owner_id, get_text("ownerId", Node)},
+     {group_id, get_text("groupId", Node)},
      {group_name, get_text("groupName", Node)},
      {group_description, get_text("groupDescription", Node)},
      {vpc_id, get_text("vpcId", Node)},
