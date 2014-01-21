@@ -2287,10 +2287,14 @@ reset_snapshot_attribute(SnapshotID, create_volume_permission, Config)
 revoke_security_group_ingress(GroupName, IngressSpec) ->
     revoke_security_group_ingress(GroupName, IngressSpec, default_config()).
 
--spec(revoke_security_group_ingress/3 :: (string(), ec2_ingress_spec(), aws_config()) -> ok).
 revoke_security_group_ingress(GroupName, IngressSpec, Config)
   when is_list(GroupName), is_record(IngressSpec, ec2_ingress_spec) ->
     Params = [{"GroupName", GroupName}|ingress_spec_params(IngressSpec)],
+    ec2_simple_query2(Config, "RevokeSecurityGroupIngress", Params);
+
+revoke_security_group_ingress(GroupName, IngressSpec, Config)
+  when is_list(GroupName), is_record(IngressSpec, vpc_ingress_spec) ->
+    Params = [{"GroupName", GroupName}|vpc_ingress_spec_to_params([IngressSpec])],
     ec2_simple_query2(Config, "RevokeSecurityGroupIngress", Params).
 
 %%
