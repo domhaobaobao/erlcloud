@@ -4,7 +4,9 @@
 -export([configure/2, configure/3, new/2, new/3]).
 
 %% ELB API Functions
--export([create_load_balancer/4, create_load_balancer/5, create_load_balancer/6,
+-export([apply_security_groups_to_load_balancer/2, apply_security_groups_to_load_balancer/3,
+
+		 create_load_balancer/4, create_load_balancer/5, create_load_balancer/6,
          delete_load_balancer/1, delete_load_balancer/2,
 
          register_instance/2, register_instance/3,
@@ -45,6 +47,15 @@ configure(AccessKeyID, SecretAccessKey, Host) ->
 
 default_config() -> erlcloud_aws:default_config().
 
+apply_security_groups_to_load_balancer(LB, SGList) ->
+	apply_security_groups_to_load_balancer(LB, SGList, default_config()).
+
+apply_security_groups_to_load_balancer(LB, SGList, Config) ->
+	XML = elb_request(Config,
+		"ApplySecurityGroupsToLoadBalancer",
+		lists:concat([prepare_security_group_list(SGList), [{"LoadBalancerName", LB}]])),
+	{ok, get_text("/ApplySecurityGroupsToLoadBalancerResponse/ApplySecurityGroupsToLoadBalancerResult/SecurityGroups", XML)}.
+
 
 create_load_balancer(LB, LoadBalancerPort, InstancePort, Protocol) when is_list(LB),
 																		is_integer(LoadBalancerPort),
@@ -75,6 +86,10 @@ create_load_balancer(LB, LoadBalancerPort, InstancePort, Protocol, ZoneList, Con
 
 prepare_zone_list(ZoneList) ->
 	{List, _} = lists:foldl(fun(Zone, {AccIn, Count}) -> {[{lists:concat(["AvailabilityZones.member.", Count+1]), Zone} | AccIn], Count+1} end, {[], 0}, ZoneList),
+	List.
+
+prepare_security_group_list(SGList) ->
+	{List, _} = lists:foldl(fun(Zone, {AccIn, Count}) -> {[{lists:concat(["SecurityGroups.member.", Count+1]), Zone} | AccIn], Count+1} end, {[], 0}, SGList),
 	List.
 
 delete_load_balancer(LB) when is_list(LB) ->
