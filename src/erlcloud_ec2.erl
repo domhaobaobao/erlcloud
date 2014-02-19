@@ -688,7 +688,7 @@ create_snapshot(VolumeID, Description) ->
 create_snapshot(VolumeID, Description, Config)
   when is_list(VolumeID), is_list(Description) ->
     case ec2_query2(Config, "CreateSnapshot", [{"VolumeId", VolumeID}, {"Description", Description}]) of
-        {ok, Doc} -> 
+        {ok, Doc} ->
             {ok, [
                  {snapshot_id, get_text("/CreateSnapshotResponse/snapshotId", Doc)},
                  {volume_id, get_text("/CreateSnapshotResponse/volumeId", Doc)},
@@ -1239,6 +1239,8 @@ extract_reservation(Node) ->
 
 extract_instance(Node) ->
     [{instance_id, get_text("instanceId", Node)},
+     {group_set, get_list("groupSet/item/groupName", Node)},
+     {tag_set, get_list("tagSet/item", Node)},
      {image_id, get_text("imageId", Node)},
      {instance_state_code, list_to_integer(get_text("instanceState/code", Node, "0"))},
      {instance_state_name, get_text("instanceState/name", Node)},
@@ -1706,7 +1708,7 @@ describe_spot_instance_requests(SpotInstanceRequestIDs, Config)
         {ok, Doc} ->
             {ok, [extract_spot_instance_request(Item) ||
                     Item <- xmerl_xpath:string("/DescribeSpotInstanceRequestsResponse/spotInstanceRequestSet/item", Doc)]};
-        {error, Reason} -> 
+        {error, Reason} ->
             {error, Reason}
     end.
 
@@ -2537,7 +2539,7 @@ unmonitor_instances(InstanceIDs, Config) ->
 
 ec2_simple_query2(Config, Action, Params) ->
     case ec2_query2(Config, Action, Params) of
-        {ok,    _} -> 
+        {ok,    _} ->
             ok;
         {error, _} = Error ->
             Error
@@ -2549,7 +2551,7 @@ ec2_simple_query2(Config, Action, Params, ApiVersion) ->
             ok;
         {error, _} = Error ->
             Error
-    end. 
+    end.
 
 ec2_query2(Config, Action, Params) ->
     ec2_query2(Config, Action, Params, ?API_VERSION).
