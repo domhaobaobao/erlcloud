@@ -4,7 +4,9 @@
 -export([configure/2, configure/3, new/2, new/3]).
 
 %% ELB API Functions
--export([create_load_balancer/3, create_load_balancer/4, create_load_balancer/5,
+-export([apply_security_groups_to_load_balancer/2, apply_security_groups_to_load_balancer/3,
+
+		 create_load_balancer/4, create_load_balancer/5, create_load_balancer/6,
          delete_load_balancer/1, delete_load_balancer/2,
 
          register_instance/2, register_instance/3,
@@ -18,7 +20,7 @@
 -include_lib("erlcloud/include/erlcloud.hrl").
 -include_lib("erlcloud/include/erlcloud_aws.hrl").
 
--define(API_VERSION, "2009-05-15").
+-define(API_VERSION, "2012-06-01").
 
 -import(erlcloud_xml, [get_text/2]).
 
@@ -45,30 +47,58 @@ configure(AccessKeyID, SecretAccessKey, Host) ->
 
 default_config() -> erlcloud_aws:default_config().
 
+apply_security_groups_to_load_balancer(LB, SGList) ->
+	apply_security_groups_to_load_balancer(LB, SGList, default_config()).
 
-create_load_balancer(LB, Port, Protocol) when is_list(LB),
-                                              is_integer(Port),
-                                              is_atom(Protocol) ->
-    create_load_balancer(LB, Port, Protocol, default_config()).
+apply_security_groups_to_load_balancer(LB, SGList, Config) ->
+	case elb_request(Config,
+		"ApplySecurityGroupsToLoadBalancer",
+		lists:concat([prepare_security_group_list(SGList), [{"LoadBalancerName", LB}]])) of
+		{error, Error} ->
+			{error, Error};
+		{ok, XML} ->
+			{ok, get_text("/ApplySecurityGroupsToLoadBalancerResponse/ApplySecurityGroupsToLoadBalancerResult/SecurityGroups", XML)}
+	end.
 
-create_load_balancer(LB, Port, Protocol, Config) when is_list(LB),
-                                                      is_integer(Port),
-                                                      is_atom(Protocol) ->
-    create_load_balancer(LB, Port, Protocol, "us-east-1d", Config).
 
-create_load_balancer(LB, Port, Protocol, Zone, Config) when is_list(LB),
-                                                            is_integer(Port),
-                                                            is_atom(Protocol),
-                                                            is_list(Zone) ->
-    XML = elb_request(Config,
+create_load_balancer(LB, LoadBalancerPort, InstancePort, Protocol) when is_list(LB),
+																		is_integer(LoadBalancerPort),
+																		is_integer(InstancePort),
+																		is_atom(Protocol) ->
+    create_load_balancer(LB, LoadBalancerPort, InstancePort, Protocol, default_config()).
+
+create_load_balancer(LB, LoadBalancerPort, InstancePort, Protocol, Config) when is_list(LB),
+																				is_integer(LoadBalancerPort),
+																				is_integer(InstancePort),
+																				is_atom(Protocol) ->
+    create_load_balancer(LB, LoadBalancerPort, InstancePort, Protocol, "us-east-1d", Config).
+
+create_load_balancer(LB, LoadBalancerPort, InstancePort, Protocol, ZoneList, Config) when is_list(LB),
+																						is_integer(LoadBalancerPort),
+																						is_integer(InstancePort),
+																						is_atom(Protocol),
+																						is_list(ZoneList) ->
+    case elb_request(Config,
                       "CreateLoadBalancer",
-                      [{"AvailabilityZones.member.1", Zone},
-                       {"LoadBalancerName", LB} |
-                       erlcloud_aws:param_list([[{"LoadBalancerPort", Port},
-                                                 {"InstancePort", Port},
+                      lists:concat([prepare_zone_list(ZoneList),
+                       [{"LoadBalancerName", LB}],
+                       erlcloud_aws:param_list([[{"LoadBalancerPort", LoadBalancerPort},
+                                                 {"InstancePort", InstancePort},
                                                  {"Protocol", string:to_upper(atom_to_list(Protocol))}]],
-                                               "Listeners.member")]),
-    {ok, get_text("/CreateLoadBalancerResponse/CreateLoadBalancerResult/DNSName", XML)}.
+                                               "Listeners.member")])) of
+		{error, Error} ->
+			{error, Error};
+		{ok, XML} ->
+			{ok, get_text("/CreateLoadBalancerResponse/CreateLoadBalancerResult/DNSName", XML)}
+	end.
+
+prepare_zone_list(ZoneList) ->
+	{List, _} = lists:foldl(fun(Zone, {AccIn, Count}) -> {[{lists:concat(["AvailabilityZones.member.", Count+1]), Zone} | AccIn], Count+1} end, {[], 0}, ZoneList),
+	List.
+
+prepare_security_group_list(SGList) ->
+	{List, _} = lists:foldl(fun(Zone, {AccIn, Count}) -> {[{lists:concat(["SecurityGroups.member.", Count+1]), Zone} | AccIn], Count+1} end, {[], 0}, SGList),
+	List.
 
 delete_load_balancer(LB) when is_list(LB) ->
     delete_load_balancer(LB, default_config()).
@@ -135,7 +165,7 @@ describe_load_balancers(Names, Config) ->
 
 elb_request(Config, Action, Params) ->
     QParams = [{"Action", Action}, {"Version", ?API_VERSION} | Params],
-    erlcloud_aws:aws_request_xml(get, Config#aws_config.elb_host,
+    erlcloud_aws:aws_request_xml2(get, Config#aws_config.elb_host,
                                  "/", QParams, Config).
 
 elb_simple_request(Config, Action, Params) ->
