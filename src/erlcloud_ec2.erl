@@ -1249,7 +1249,7 @@ extract_reservation(Node) ->
 extract_instance(Node) ->
     [{instance_id, get_text("instanceId", Node)},
      {group_set, get_list("groupSet/item/groupName", Node)},
-     {tag_set, get_list("tagSet/item", Node)},
+     {tag_set, lists:zip(get_list("tagSet/item/key", Node),get_list("tagSet/item/value", Node))},
      {image_id, get_text("imageId", Node)},
      {instance_state_code, list_to_integer(get_text("instanceState/code", Node, "0"))},
      {instance_state_name, get_text("instanceState/name", Node)},
