@@ -5,7 +5,7 @@
 -include("erlcloud_ddb2.hrl").
 
 %% Unit tests for ddb.
-%% These tests work by using meck to mock httpc. There are two classes of test: input and output.
+%% These tests work by using meck to mock erlcloud_httpc. There are two classes of test: input and output.
 %%
 %% Input tests verify that different function args produce the desired JSON request.
 %% An input test list provides a list of funs and the JSON that is expected to result.
@@ -43,6 +43,7 @@ operation_test_() ->
       fun describe_table_output_tests/1,
       fun get_item_input_tests/1,
       fun get_item_output_tests/1,
+      fun get_item_output_typed_tests/1,
       fun list_tables_input_tests/1,
       fun list_tables_output_tests/1,
       fun put_item_input_tests/1,
@@ -58,11 +59,11 @@ operation_test_() ->
      ]}.
 
 start() ->
-    meck:new(httpc, [unstick]),
+    meck:new(erlcloud_httpc),
     ok.
 
 stop(_) ->
-    meck:unload(httpc).
+    meck:unload(erlcloud_httpc).
 
 %%%===================================================================
 %%% Input test helpers
@@ -70,17 +71,21 @@ stop(_) ->
 
 -type expected_body() :: string().
 
-sort_object([{_, _} | _] = V) ->
+sort_json([{_, _} | _] = Json) ->
     %% Value is an object
-    lists:keysort(1, V);
-sort_object(V) ->
+    SortedChildren = [{K, sort_json(V)} || {K,V} <- Json],
+    lists:keysort(1, SortedChildren);
+sort_json([_|_] = Json) ->
+    %% Value is an array
+    [sort_json(I) || I <- Json];
+sort_json(V) ->
     V.
 
 %% verifies that the parameters in the body match the expected parameters
 -spec validate_body(binary(), expected_body()) -> ok.
 validate_body(Body, Expected) ->
-    Want = jsx:decode(list_to_binary(Expected), [{post_decode, fun sort_object/1}]), 
-    Actual = jsx:decode(Body, [{post_decode, fun sort_object/1}]),
+    Want = sort_json(jsx:decode(list_to_binary(Expected))),
+    Actual = sort_json(jsx:decode(Body)),
     case Want =:= Actual of
         true -> ok;
         false ->
@@ -88,13 +93,13 @@ validate_body(Body, Expected) ->
     end,
     ?assertEqual(Want, Actual).
 
-%% returns the mock of the httpc function input tests expect to be called.
+%% returns the mock of the erlcloud_httpc function input tests expect to be called.
 %% Validates the request body and responds with the provided response.
 -spec input_expect(string(), expected_body()) -> fun().
 input_expect(Response, Expected) ->
-    fun(post, {_Url, _Headers, _ContentType, Body}, _HTTPOpts, _Opts) -> 
+    fun(_Url, post, _Headers, Body, _Timeout, _Config) -> 
             validate_body(Body, Expected),
-            {ok, {{0, 200, 0}, 0, list_to_binary(Response)}} 
+            {ok, {{200, "OK"}, [], list_to_binary(Response)}} 
     end.
 
 %% input_test converts an input_test specifier into an eunit test generator
@@ -105,7 +110,7 @@ input_test(Response, {Line, {Description, Fun, Expected}}) when
     {Description, 
      {Line,
       fun() ->
-              meck:expect(httpc, request, input_expect(Response, Expected)),
+              meck:expect(erlcloud_httpc, request, input_expect(Response, Expected)),
               erlcloud_ddb2:configure(string:copies("A", 20), string:copies("a", 40)),
               Fun()
       end}}.
@@ -121,11 +126,11 @@ input_tests(Response, Tests) ->
 %%% Output test helpers
 %%%===================================================================
 
-%% returns the mock of the httpc function output tests expect to be called.
+%% returns the mock of the erlcloud_httpc function output tests expect to be called.
 -spec output_expect(string()) -> fun().
 output_expect(Response) ->
-    fun(post, {_Url, _Headers, _ContentType, _Body}, _HTTPOpts, _Opts) -> 
-            {ok, {{0, 200, 0}, 0, list_to_binary(Response)}} 
+    fun(_Url, post, _Headers, _Body, _Timeout, _Config) -> 
+            {ok, {{200, "OK"}, [], list_to_binary(Response)}} 
     end.
 
 %% output_test converts an output_test specifier into an eunit test generator
@@ -135,7 +140,7 @@ output_test(Fun, {Line, {Description, Response, Result}}) ->
     {Description,
      {Line,
       fun() ->
-              meck:expect(httpc, request, output_expect(Response)),
+              meck:expect(erlcloud_httpc, request, output_expect(Response)),
               erlcloud_ddb2:configure(string:copies("A", 20), string:copies("a", 40)),
               Actual = Fun(),
               case Result =:= Actual of
@@ -160,7 +165,7 @@ output_tests(Fun, Tests) ->
 
 -spec httpc_response(pos_integer(), string()) -> tuple().
 httpc_response(Code, Body) ->
-    {ok, {{"", Code, ""}, [], list_to_binary(Body)}}.
+    {ok, {{Code, ""}, [], list_to_binary(Body)}}.
     
 -type error_test_spec() :: {pos_integer(), {string(), list(), term()}}.
 -spec error_test(fun(), error_test_spec()) -> tuple().
@@ -170,7 +175,7 @@ error_test(Fun, {Line, {Description, Responses, Result}}) ->
     {Description,
      {Line,
       fun() ->
-              meck:sequence(httpc, request, 4, Responses1),
+              meck:sequence(erlcloud_httpc, request, 6, Responses1),
               erlcloud_ddb2:configure(string:copies("A", 20), string:copies("a", 40)),
               Actual = Fun(),
               ?assertEqual(Result, Actual)
@@ -279,6 +284,48 @@ batch_get_item_input_tests(_) ->
             \"AttributesToGet\": [
                 \"Tags\",\"Message\"
             ]
+        }
+    },
+    \"ReturnConsumedCapacity\": \"TOTAL\"
+}"
+            }),
+         ?_ddb_test(
+             {"BatchGetItem example request with ProjectionExpression",
+              ?_f(erlcloud_ddb2:batch_get_item(
+                    [{<<"Forum">>,
+                      [{<<"Name">>, {s, <<"Amazon DynamoDB">>}},
+                       {<<"Name">>, {s, <<"Amazon RDS">>}},
+                       {<<"Name">>, {s, <<"Amazon Redshift">>}}],
+                      [{projection_expression, <<"Id, ISBN, Title, Authors">>}]},
+                     {<<"Thread">>,
+                      [[{<<"ForumName">>, {s, <<"Amazon DynamoDB">>}},
+                        {<<"Subject">>, {s, <<"Concurrent reads">>}}]],
+                      [{projection_expression, <<"Tags, Message">>}]}],
+                    [{return_consumed_capacity, total}])), "
+{
+    \"RequestItems\": {
+        \"Forum\": {
+            \"Keys\": [
+                {
+                    \"Name\":{\"S\":\"Amazon DynamoDB\"}
+                },
+                {
+                    \"Name\":{\"S\":\"Amazon RDS\"}
+                },
+                {
+                    \"Name\":{\"S\":\"Amazon Redshift\"}
+                }
+            ],
+            \"ProjectionExpression\":\"Id, ISBN, Title, Authors\"
+        },
+        \"Thread\": {
+            \"Keys\": [
+                {
+                    \"ForumName\":{\"S\":\"Amazon DynamoDB\"},
+                    \"Subject\":{\"S\":\"Concurrent reads\"}
+                }
+            ],
+            \"ProjectionExpression\":\"Tags, Message\"
         }
     },
     \"ReturnConsumedCapacity\": \"TOTAL\"
@@ -796,7 +843,9 @@ create_table_input_tests(_) ->
                    5, 
                    5,
                    [{local_secondary_indexes,
-                     [{<<"LastPostIndex">>, <<"LastPostDateTime">>, keys_only}]}]
+                     [{<<"LastPostIndex">>, <<"LastPostDateTime">>, keys_only}]},
+                    {global_secondary_indexes,
+                     [{<<"SubjectIndex">>, {<<"Subject">>, <<"LastPostDateTime">>}, keys_only, 10, 5}]}]
                   )), "
 {
     \"AttributeDefinitions\": [
@@ -813,6 +862,28 @@ create_table_input_tests(_) ->
             \"AttributeType\": \"S\"
         }
     ],
+    \"GlobalSecondaryIndexes\": [
+        {
+            \"IndexName\": \"SubjectIndex\",
+            \"KeySchema\": [
+                {
+                    \"AttributeName\": \"Subject\",
+                    \"KeyType\": \"HASH\"
+                },
+                {
+                    \"AttributeName\": \"LastPostDateTime\",
+                    \"KeyType\": \"RANGE\"
+                }
+            ],
+            \"Projection\": {
+                \"ProjectionType\": \"KEYS_ONLY\"
+            },
+            \"ProvisionedThroughput\": {
+                \"ReadCapacityUnits\": 10,
+                \"WriteCapacityUnits\": 5
+            }
+        }
+    ],    
     \"TableName\": \"Thread\",
     \"KeySchema\": [
         {
@@ -849,7 +920,7 @@ create_table_input_tests(_) ->
 }"
             }),
          ?_ddb_test(
-            {"CreateTable with INCLUDE local secondary index",
+            {"CreateTable with INCLUDE local and global secondary index",
              ?_f(erlcloud_ddb2:create_table(
                    <<"Thread">>,
                    [{<<"ForumName">>, s},
@@ -859,7 +930,9 @@ create_table_input_tests(_) ->
                    5, 
                    5,
                    [{local_secondary_indexes,
-                     [{<<"LastPostIndex">>, <<"LastPostDateTime">>, {include, [<<"Author">>, <<"Body">>]}}]}]
+                     [{<<"LastPostIndex">>, <<"LastPostDateTime">>, {include, [<<"Author">>, <<"Body">>]}}]},
+                    {global_secondary_indexes,
+                     [{<<"SubjectIndex">>, {<<"Subject">>, <<"LastPostDateTime">>}, {include, [<<"Author">>]}, 10, 5}]}]  
                   )), "
 {
     \"AttributeDefinitions\": [
@@ -876,6 +949,31 @@ create_table_input_tests(_) ->
             \"AttributeType\": \"S\"
         }
     ],
+    \"GlobalSecondaryIndexes\": [
+        {
+            \"IndexName\": \"SubjectIndex\",
+            \"KeySchema\": [
+                {
+                    \"AttributeName\": \"Subject\",
+                    \"KeyType\": \"HASH\"
+                },
+                {
+                    \"AttributeName\": \"LastPostDateTime\",
+                    \"KeyType\": \"RANGE\"
+                }
+            ],
+            \"Projection\": {
+                \"NonKeyAttributes\": [
+                    \"Author\"
+                ],
+                \"ProjectionType\": \"INCLUDE\"
+            },
+            \"ProvisionedThroughput\": {
+                \"ReadCapacityUnits\": 10,
+                \"WriteCapacityUnits\": 5
+            }
+        }
+    ],  
     \"TableName\": \"Thread\",
     \"KeySchema\": [
         {
@@ -1025,6 +1123,34 @@ create_table_output_tests(_) ->
             }
         ],
         \"CreationDateTime\": 1.36372808007E9,
+        \"GlobalSecondaryIndexes\": [
+            {
+                \"IndexName\": \"SubjectIndex\",
+                \"IndexSizeBytes\": 2048,
+                \"IndexStatus\": \"CREATING\",
+                \"ItemCount\": 47,
+                \"KeySchema\": [
+                    {
+                        \"AttributeName\": \"Subject\",
+                        \"KeyType\": \"HASH\"
+                    },
+                    {
+                        \"AttributeName\": \"LastPostDateTime\",
+                        \"KeyType\": \"RANGE\"
+                    }
+                ],
+                \"Projection\": {
+                    \"ProjectionType\": \"KEYS_ONLY\"
+                },
+                \"ProvisionedThroughput\": {
+                    \"LastDecreaseDateTime\": 0,
+                    \"LastIncreaseDateTime\": 1,
+                    \"NumberOfDecreasesToday\": 2,
+                    \"ReadCapacityUnits\": 3,
+                    \"WriteCapacityUnits\": 4
+                }
+            }
+        ],
         \"ItemCount\": 0,
         \"KeySchema\": [
             {
@@ -1080,6 +1206,21 @@ create_table_output_tests(_) ->
                        item_count = 0,
                        key_schema = {<<"ForumName">>, <<"LastPostDateTime">>},
                        projection = keys_only}],
+               global_secondary_indexes = 
+                   [#ddb2_global_secondary_index_description{
+                       index_name = <<"SubjectIndex">>,
+                       index_size_bytes = 2048,
+                       index_status = creating,
+                       item_count = 47,
+                       key_schema = {<<"Subject">>, <<"LastPostDateTime">>},
+                       projection = keys_only,
+                       provisioned_throughput = #ddb2_provisioned_throughput_description{
+                          last_decrease_date_time = 0,
+                          last_increase_date_time = 1,
+                          number_of_decreases_today = 2,
+                          read_capacity_units = 3,
+                          write_capacity_units = 4}
+                    }],
                provisioned_throughput = 
                    #ddb2_provisioned_throughput_description{
                       last_decrease_date_time = undefined,
@@ -1108,6 +1249,37 @@ create_table_output_tests(_) ->
                 \"AttributeType\": \"S\"
             }
         ],
+        \"GlobalSecondaryIndexes\": [
+            {
+                \"IndexName\": \"SubjectIndex\",
+                \"IndexSizeBytes\": 2048,
+                \"IndexStatus\": \"CREATING\",
+                \"ItemCount\": 47,
+                \"KeySchema\": [
+                    {
+                        \"AttributeName\": \"Subject\",
+                        \"KeyType\": \"HASH\"
+                    },
+                    {
+                        \"AttributeName\": \"LastPostDateTime\",
+                        \"KeyType\": \"RANGE\"
+                    }
+                ],
+                \"Projection\": {
+                    \"NonKeyAttributes\" : [
+                        \"Author\"
+                    ],
+                    \"ProjectionType\": \"INCLUDE\"
+                },
+                \"ProvisionedThroughput\": {
+                    \"LastDecreaseDateTime\": 0,
+                    \"LastIncreaseDateTime\": 1,
+                    \"NumberOfDecreasesToday\": 2,
+                    \"ReadCapacityUnits\": 3,
+                    \"WriteCapacityUnits\": 4
+                }
+            }
+        ],        
         \"CreationDateTime\": 1.36372808007E9,
         \"ItemCount\": 0,
         \"KeySchema\": [
@@ -1165,6 +1337,21 @@ create_table_output_tests(_) ->
                        item_count = 0,
                        key_schema = {<<"ForumName">>, <<"LastPostDateTime">>},
                        projection = {include, [<<"Author">>, <<"Body">>]}}],
+               global_secondary_indexes = 
+                   [#ddb2_global_secondary_index_description{
+                       index_name = <<"SubjectIndex">>,
+                       index_size_bytes = 2048,
+                       index_status = creating,
+                       item_count = 47,
+                       key_schema = {<<"Subject">>, <<"LastPostDateTime">>},
+                       projection = {include, [<<"Author">>]},
+                       provisioned_throughput = #ddb2_provisioned_throughput_description{
+                          last_decrease_date_time = 0,
+                          last_increase_date_time = 1,
+                          number_of_decreases_today = 2,
+                          read_capacity_units = 3,
+                          write_capacity_units = 4}
+                    }],
                provisioned_throughput = 
                    #ddb2_provisioned_throughput_description{
                       last_decrease_date_time = undefined,
@@ -1233,7 +1420,7 @@ delete_item_input_tests(_) ->
                                           [{<<"ForumName">>, {s, <<"Amazon DynamoDB">>}},
                                            {<<"Subject">>, {s, <<"How do I update multiple items?">>}}],
                                           [{return_values, all_old},
-                                           {expected, {<<"Replies">>, false}}])), "
+                                           {expected, {<<"Replies">>, null}}])), "
 {
     \"TableName\": \"Thread\",
     \"Key\": {
@@ -1246,9 +1433,30 @@ delete_item_input_tests(_) ->
     },
     \"Expected\": {
         \"Replies\": {
-            \"Exists\": false
+            \"ComparisonOperator\": \"NULL\"
         }
     },
+    \"ReturnValues\": \"ALL_OLD\"
+}"
+            }),
+         ?_ddb_test(
+            {"DeleteItem example request with ConditionExpression",
+             ?_f(erlcloud_ddb2:delete_item(<<"Thread">>,
+                                          [{<<"ForumName">>, {s, <<"Amazon DynamoDB">>}},
+                                           {<<"Subject">>, {s, <<"How do I update multiple items?">>}}],
+                                          [{return_values, all_old},
+                                           {condition_expression, <<"attribute_not_exists(Replies)">>}])), "
+{
+    \"TableName\": \"Thread\",
+    \"Key\": {
+        \"ForumName\": {
+            \"S\": \"Amazon DynamoDB\"
+        },
+        \"Subject\": {
+            \"S\": \"How do I update multiple items?\"
+        }
+    },
+    \"ConditionExpression\": \"attribute_not_exists(Replies)\",
     \"ReturnValues\": \"ALL_OLD\"
 }"
             }),
@@ -1513,6 +1721,37 @@ describe_table_output_tests(_) ->
                 \"AttributeType\": \"S\"
             }
         ],
+        \"GlobalSecondaryIndexes\": [
+            {
+                \"IndexName\": \"SubjectIndex\",
+                \"IndexSizeBytes\": 2048,
+                \"IndexStatus\": \"CREATING\",
+                \"ItemCount\": 47,
+                \"KeySchema\": [
+                    {
+                        \"AttributeName\": \"Subject\",
+                        \"KeyType\": \"HASH\"
+                    },
+                    {
+                        \"AttributeName\": \"LastPostDateTime\",
+                        \"KeyType\": \"RANGE\"
+                    }
+                ],
+                \"Projection\": {
+                    \"NonKeyAttributes\" : [
+                        \"Author\"
+                    ],
+                    \"ProjectionType\": \"INCLUDE\"
+                },
+                \"ProvisionedThroughput\": {
+                    \"LastDecreaseDateTime\": 0,
+                    \"LastIncreaseDateTime\": 1,
+                    \"NumberOfDecreasesToday\": 2,
+                    \"ReadCapacityUnits\": 3,
+                    \"WriteCapacityUnits\": 4
+                }
+            }
+        ],          
         \"CreationDateTime\": 1.363729002358E9,
         \"ItemCount\": 0,
         \"KeySchema\": [
@@ -1569,6 +1808,21 @@ describe_table_output_tests(_) ->
                        item_count = 0,
                        key_schema = {<<"ForumName">>, <<"LastPostDateTime">>},
                        projection = keys_only}],
+               global_secondary_indexes = 
+                   [#ddb2_global_secondary_index_description{
+                       index_name = <<"SubjectIndex">>,
+                       index_size_bytes = 2048,
+                       index_status = creating,
+                       item_count = 47,
+                       key_schema = {<<"Subject">>, <<"LastPostDateTime">>},
+                       projection = {include, [<<"Author">>]},
+                       provisioned_throughput = #ddb2_provisioned_throughput_description{
+                          last_decrease_date_time = 0,
+                          last_increase_date_time = 1,
+                          number_of_decreases_today = 2,
+                          read_capacity_units = 3,
+                          write_capacity_units = 4}
+                    }],                       
                provisioned_throughput = 
                    #ddb2_provisioned_throughput_description{
                       last_decrease_date_time = undefined,
@@ -1625,6 +1879,30 @@ get_item_input_tests(_) ->
                                         {return_consumed_capacity, total}]
                                       )),
              Example1Response}),
+         ?_ddb_test(
+            {"GetItem example request, with ProjectionExpression",
+             ?_f(erlcloud_ddb2:get_item(<<"Thread">>,
+                                       [{<<"ForumName">>, {s, <<"Amazon DynamoDB">>}},
+                                        {<<"Subject">>, {s, <<"How do I update multiple items?">>}}],
+                                       [{projection_expression, <<"LastPostDateTime, Message, Tags">>},
+                                        consistent_read,
+                                        {return_consumed_capacity, total}]
+                                      )), "
+{
+    \"TableName\": \"Thread\",
+    \"Key\": {
+        \"ForumName\": {
+            \"S\": \"Amazon DynamoDB\"
+        },
+        \"Subject\": {
+            \"S\": \"How do I update multiple items?\"
+        }
+    },
+    \"ProjectionExpression\": \"LastPostDateTime, Message, Tags\",
+    \"ConsistentRead\": true,
+    \"ReturnConsumedCapacity\": \"TOTAL\"
+}"
+            }),
          ?_ddb_test(
             {"GetItem Simple call with only hash key and no options",
              ?_f(erlcloud_ddb2:get_item(<<"TableName">>, {<<"HashKey">>, 1})), "
@@ -1719,6 +1997,38 @@ get_item_output_tests(_) ->
     
     output_tests(?_f(erlcloud_ddb2:get_item(<<"table">>, {<<"k">>, <<"v">>}, [{out, record}])), Tests).
 
+get_item_output_typed_tests(_) ->
+    Tests = 
+        [?_ddb_test(
+            {"GetItem typed test all attribute types", "
+{\"Item\":
+	{\"ss\":{\"SS\":[\"Lynda\", \"Aaron\"]},
+	 \"ns\":{\"NS\":[\"12\",\"13.0\",\"14.1\"]},
+	 \"bs\":{\"BS\":[\"BbY=\"]},
+	 \"es\":{\"SS\":[]},
+	 \"s\":{\"S\":\"Lynda\"},
+	 \"n\":{\"N\":\"12\"},
+	 \"f\":{\"N\":\"12.34\"},
+	 \"b\":{\"B\":\"BbY=\"},
+	 \"empty\":{\"S\":\"\"}
+	}
+}",
+             {ok, #ddb2_get_item{
+                     item = [{<<"ss">>, {ss, [<<"Lynda">>, <<"Aaron">>]}},
+                             {<<"ns">>, {ns, [12,13.0,14.1]}},
+                             {<<"bs">>, {bs, [<<5,182>>]}},
+                             {<<"es">>, {ss,  []}},
+                             {<<"s">>, {s, <<"Lynda">>}},
+                             {<<"n">>, {n, 12}},
+                             {<<"f">>, {n, 12.34}},
+                             {<<"b">>, {b, <<5,182>>}},
+                             {<<"empty">>, {s, <<>>}}],
+                    consumed_capacity = undefined}}})
+        ],
+    
+    output_tests(?_f(erlcloud_ddb2:get_item(
+                       <<"table">>, {<<"k">>, <<"v">>}, [{out, typed_record}])), Tests).
+
 %% ListTables test based on the API examples:
 %% http://docs.aws.amazon.com/amazondynamodb/latest/developerguide/API_ListTables.html
 list_tables_input_tests(_) ->
@@ -1774,7 +2084,7 @@ put_item_input_tests(_) ->
                                         {<<"Tags">>, {ss, [<<"Update">>, <<"Multiple Items">>, <<"HelpMe">>]}},
                                         {<<"Subject">>, <<"How do I update multiple items?">>},
                                         {<<"Message">>, <<"I want to update multiple items in a single API call. What's the best way to do that?">>}],
-                                       [{expected, [{<<"ForumName">>, false}, {<<"Subject">>, false}]}])), "
+                                       [{expected, [{<<"ForumName">>, null}, {<<"Subject">>, null}]}])), "
 {
     \"TableName\": \"Thread\",
     \"Item\": {
@@ -1799,10 +2109,10 @@ put_item_input_tests(_) ->
     },
     \"Expected\": {
         \"ForumName\": {
-            \"Exists\": false
+            \"ComparisonOperator\": \"NULL\"
         },
         \"Subject\": {
-            \"Exists\": false
+            \"ComparisonOperator\": \"NULL\"
         }
     }
 }"
@@ -1826,6 +2136,87 @@ put_item_input_tests(_) ->
         \"mixed set\": {
             \"NS\": [\"7.8\", \"9.0\", \"10\"]
         }
+    }
+}"
+            }),
+         ?_ddb_test(
+            {"PutItem example request with ConditionExpression and ExpressionAttributeValues",
+             ?_f(erlcloud_ddb2:put_item(<<"Thread">>,
+                                       [{<<"LastPostedBy">>, <<"fred@example.com">>},
+                                        {<<"ForumName">>, <<"Amazon DynamoDB">>},
+                                        {<<"LastPostDateTime">>, <<"201303190422">>},
+                                        {<<"Tags">>, {ss, [<<"Update">>, <<"Multiple Items">>, <<"HelpMe">>]}},
+                                        {<<"Subject">>, <<"How do I update multiple items?">>},
+                                        {<<"Message">>, <<"I want to update multiple items in a single API call. What's the best way to do that?">>}],
+                                       [{condition_expression, <<"ForumName <> :f and Subject <> :s">>},
+                                        {expression_attribute_values, [
+                                            {<<":f">>, <<"Amazon DynamoDB">>},
+                                            {<<":s">>, <<"How do I update multiple items?">>}]}])), "
+{
+    \"TableName\": \"Thread\",
+    \"Item\": {
+        \"LastPostDateTime\": {
+            \"S\": \"201303190422\"
+        },
+        \"Tags\": {
+            \"SS\": [\"Update\",\"Multiple Items\",\"HelpMe\"]
+        },
+        \"ForumName\": {
+            \"S\": \"Amazon DynamoDB\"
+        },
+        \"Message\": {
+            \"S\": \"I want to update multiple items in a single API call. What's the best way to do that?\"
+        },
+        \"Subject\": {
+            \"S\": \"How do I update multiple items?\"
+        },
+        \"LastPostedBy\": {
+            \"S\": \"fred@example.com\"
+        }
+    },
+    \"ConditionExpression\": \"ForumName <> :f and Subject <> :s\",
+    \"ExpressionAttributeValues\": {
+        \":f\": {
+            \"S\": \"Amazon DynamoDB\"
+        },
+        \":s\": {
+            \"S\": \"How do I update multiple items?\"
+        }
+    }
+}"
+            }),
+        ?_ddb_test(
+            {"PutItem request with complex item",
+             ?_f(erlcloud_ddb2:put_item(<<"Table">>,
+                                       [{<<"bool_true">>, {bool, true}},
+                                        {<<"bool_false">>, {bool, false}},
+                                        {<<"null_value">>, {null, true}},
+                                        {<<"list_value">>, {l, ["string", {ss, ["string1", "string2"]}]}},
+                                        {<<"map_value">>, {m, [
+                                            {<<"key1">>, "value1"},
+                                            {<<"key2">>, {l, ["list_string1", "list_string2"]}}
+                                        ]}}
+                                       ])), "
+{
+    \"TableName\": \"Table\",
+    \"Item\": {
+        \"bool_true\": {\"BOOL\": true},
+        \"bool_false\": {\"BOOL\": false},
+        \"null_value\": {\"NULL\": true},
+        \"list_value\": {\"L\": [
+            {\"S\": \"string\"},
+            {\"SS\": [
+                \"string1\",
+                \"string2\"
+            ]}
+        ]},
+        \"map_value\": {\"M\": {
+            \"key1\": {\"S\": \"value1\"},
+            \"key2\": {\"L\": [
+                {\"S\": \"list_string1\"},
+                {\"S\": \"list_string2\"}
+            ]}
+        }}
     }
 }"
             })
@@ -1895,6 +2286,41 @@ put_item_output_tests(_) ->
                          #ddb2_item_collection_metrics{
                             item_collection_key = <<"Amazon DynamoDB">>,
                             size_estimate_range_gb = {1,2}}
+                     }}}),
+         ?_ddb_test(
+            {"PutItem response with complex item", "
+{
+    \"Attributes\": {
+        \"bool_true\": {\"BOOL\": true},
+        \"bool_false\": {\"BOOL\": false},
+        \"null_value\": {\"NULL\": true},
+        \"list_value\": {\"L\": [
+            {\"S\": \"string\"},
+            {\"SS\": [
+                \"string1\",
+                \"string2\"
+            ]}
+        ]},
+        \"map_value\": {\"M\": {
+            \"key1\": {\"S\": \"value1\"},
+            \"key2\": {\"L\": [
+                {\"S\": \"list_string1\"},
+                {\"S\": \"list_string2\"}
+            ]}
+        }}
+    }
+}",
+
+             {ok, #ddb2_put_item{
+                     attributes = [{<<"bool_true">>, true},
+                                   {<<"bool_false">>, false},
+                                   {<<"null_value">>, undefined},
+                                   {<<"list_value">>, [<<"string">>, [<<"string1">>, <<"string2">>]]},
+                                   {<<"map_value">>, [
+                                       {<<"key1">>, <<"value1">>},
+                                       {<<"key2">>, [<<"list_string1">>, <<"list_string2">>]}
+                                   ]}
+                                  ]
                      }}})
         ],
     
@@ -1999,6 +2425,34 @@ q_input_tests(_) ->
         }
     }
 }"
+            }),
+         ?_ddb_test(
+            {"Query example request with KeyConditionExpression, ProjectionExpression and ExpressionAttributeValues",
+             ?_f(erlcloud_ddb2:q(<<"Reply">>,
+                                <<"Id = :v1 AND PostedBy BETWEEN :v2a AND :v2b">>,
+                                [{index_name, <<"PostedBy-Index">>},
+                                 {limit, 3},
+                                 {consistent_read, true},
+                                 {projection_expression, <<"Id, PostedBy, ReplyDateTime">>},
+                                 {expression_attribute_values, [
+                                     {<<":v1">>, "Amazon DynamoDB#DynamoDB Thread 1"},
+                                     {<<":v2a">>, "User A"},
+                                     {<<":v2b">>, "User C"}]},
+                                 {return_consumed_capacity, total}])), "
+{
+    \"TableName\": \"Reply\",
+    \"IndexName\": \"PostedBy-Index\",
+    \"Limit\":3,
+    \"ConsistentRead\": true,
+    \"ProjectionExpression\": \"Id, PostedBy, ReplyDateTime\",
+    \"KeyConditionExpression\": \"Id = :v1 AND PostedBy BETWEEN :v2a AND :v2b\",
+    \"ExpressionAttributeValues\": {
+        \":v1\": {\"S\": \"Amazon DynamoDB#DynamoDB Thread 1\"},
+        \":v2a\": {\"S\": \"User A\"},
+        \":v2b\": {\"S\": \"User C\"}
+    },
+    \"ReturnConsumedCapacity\": \"TOTAL\"
+}"
             })
         ],
 
@@ -2061,7 +2515,8 @@ q_output_tests(_) ->
     \"ConsumedCapacity\": {
         \"CapacityUnits\": 2,
         \"TableName\": \"Thread\"
-    }
+    },
+    \"ScannedCount\": 3
 }",
              {ok, #ddb2_q{count = 3,
                          items = [[{<<"LastPostedBy">>, <<"fred@example.com">>},
@@ -2079,7 +2534,8 @@ q_output_tests(_) ->
                          consumed_capacity =
                              #ddb2_consumed_capacity{
                                 capacity_units = 2,
-                                table_name = <<"Thread">>}}}}),
+                                table_name = <<"Thread">>},
+		                 scanned_count = 3}}}),
          ?_ddb_test(
             {"Query example 2 response", "
 {
@@ -2144,6 +2600,15 @@ scan_input_tests(_) ->
 }"
             }),
          ?_ddb_test(
+            {"Scan consistent read",
+             ?_f(erlcloud_ddb2:scan(<<"Reply">>,
+                                   [{consistent_read, true}])), "
+{
+    \"TableName\": \"Reply\",
+    \"ConsistentRead\": true
+}"
+            }),
+         ?_ddb_test(
             {"Scan exclusive start key",
              ?_f(erlcloud_ddb2:scan(<<"Reply">>, 
                                    [{exclusive_start_key, [{<<"ForumName">>, {s, <<"Amazon DynamoDB">>}},
@@ -2169,6 +2634,20 @@ scan_input_tests(_) ->
     \"TableName\": \"Reply\",
     \"Segment\": 1,
     \"TotalSegments\": 2
+}"
+            }),
+         ?_ddb_test(
+            {"Scan example with FilterExpression",
+             ?_f(erlcloud_ddb2:scan(<<"Reply">>,
+                                   [{filter_expression, <<"PostedBy = :val">>},
+                                    {expression_attribute_values, [
+                                        {<<":val">>, {s, <<"joe@example.com">>}}]},
+                                    {return_consumed_capacity, total}])), "
+{
+    \"TableName\": \"Reply\",
+    \"FilterExpression\": \"PostedBy = :val\",
+    \"ExpressionAttributeValues\": {\":val\": {\"S\": \"joe@example.com\"}},
+    \"ReturnConsumedCapacity\": \"TOTAL\"
 }"
             })
         ],
@@ -2482,9 +2961,8 @@ update_item_input_tests(_) ->
     },
     \"Expected\": {
         \"LastPostedBy\": {
-            \"Value\": {
-                \"S\": \"fred@example.com\"
-            }
+            \"ComparisonOperator\": \"EQ\",
+            \"AttributeValueList\": [ { \"S\": \"fred@example.com\" } ]
         }
     },
     \"ReturnValues\": \"ALL_NEW\"
@@ -2516,6 +2994,36 @@ update_item_input_tests(_) ->
         }
     },
     \"ReturnValues\" : \"NONE\"
+}"
+            }),
+         ?_ddb_test(
+            {"UpdateItem example request with UpdateExpression and ConditionExpression",
+             ?_f(erlcloud_ddb2:update_item(<<"Thread">>,
+                                          [{<<"ForumName">>, {s, <<"Amazon DynamoDB">>}},
+                                           {<<"Subject">>, {s, <<"Maximum number of items?">>}}],
+                                          <<"set LastPostedBy = :val1">>,
+                                          [{condition_expression, <<"LastPostedBy = :val2">>},
+                                           {expression_attribute_values, [
+                                               {<<":val1">>, "alice@example.com"},
+                                               {<<":val2">>, "fred@example.com"}]},
+                                           {return_values, all_new}])), "
+{
+    \"TableName\": \"Thread\",
+    \"Key\": {
+        \"ForumName\": {
+            \"S\": \"Amazon DynamoDB\"
+        },
+        \"Subject\": {
+            \"S\": \"Maximum number of items?\"
+        }
+    },
+    \"UpdateExpression\": \"set LastPostedBy = :val1\",
+    \"ConditionExpression\": \"LastPostedBy = :val2\",
+    \"ExpressionAttributeValues\": {
+        \":val1\": {\"S\": \"alice@example.com\"},
+        \":val2\": {\"S\": \"fred@example.com\"}
+    },
+    \"ReturnValues\": \"ALL_NEW\"
 }"
             }),
          ?_ddb_test(
@@ -2594,13 +3102,88 @@ update_table_input_tests(_) ->
     Tests =
         [?_ddb_test(
             {"UpdateTable example request",
-             ?_f(erlcloud_ddb2:update_table(<<"Thread">>, 10, 10)), "
+             ?_f(erlcloud_ddb2:update_table(<<"Thread">>, 10, 10, 
+                                            [{global_secondary_index_updates, [{<<"SubjectIdx">>, 30, 40}, {<<"AnotherIdx">>, 50, 60}]}])), "
+{
+    \"TableName\": \"Thread\",
+    \"ProvisionedThroughput\": {
+        \"ReadCapacityUnits\": 10,
+        \"WriteCapacityUnits\": 10
+    },
+    \"GlobalSecondaryIndexUpdates\": [
+        {
+            \"Update\": {
+                \"IndexName\": \"SubjectIdx\",
+                \"ProvisionedThroughput\": {
+                    \"ReadCapacityUnits\": 30,
+                    \"WriteCapacityUnits\": 40
+                }
+            }
+        },
+        {
+            \"Update\": {
+                \"IndexName\": \"AnotherIdx\",
+                \"ProvisionedThroughput\": {
+                    \"ReadCapacityUnits\": 50,
+                    \"WriteCapacityUnits\": 60
+                }
+            }
+        }
+    ]
+}"
+            }),
+        ?_ddb_test(
+            {"UpdateTable example request with new provisioned_throughput opt",
+             ?_f(erlcloud_ddb2:update_table(<<"Thread">>,
+                                            [{provisioned_throughput, {10, 10}}])), "
 {
     \"TableName\": \"Thread\",
     \"ProvisionedThroughput\": {
         \"ReadCapacityUnits\": 10,
         \"WriteCapacityUnits\": 10
     }
+}"
+            }),
+        ?_ddb_test(
+            {"UpdateTable example request with Create and Delete GSI",
+             ?_f(erlcloud_ddb2:update_table(<<"Thread">>,
+                                            [{attribute_definitions, [{<<"HashKey1">>, s}]},
+                                             {global_secondary_index_updates, [
+                                                {<<"Index1">>, <<"HashKey1">>, all, 30, 40},
+                                                {<<"Index2">>, delete}]}])), "
+{
+    \"TableName\": \"Thread\",
+    \"AttributeDefinitions\": [
+        {
+            \"AttributeName\": \"HashKey1\",
+            \"AttributeType\": \"S\"
+        }
+    ],
+    \"GlobalSecondaryIndexUpdates\": [
+        {
+            \"Create\": {
+                \"IndexName\": \"Index1\",
+                \"KeySchema\": [
+                    {
+                        \"AttributeName\": \"HashKey1\",
+                        \"KeyType\": \"HASH\"
+                    }
+                ],
+                \"Projection\": {
+                    \"ProjectionType\": \"ALL\"
+                },
+                \"ProvisionedThroughput\": {
+                    \"ReadCapacityUnits\": 30,
+                    \"WriteCapacityUnits\": 40
+                }
+            }
+        },
+        {
+            \"Delete\": {
+                \"IndexName\": \"Index2\"
+            }
+        }
+    ]
 }"
             })
         ],
@@ -2687,6 +3270,37 @@ update_table_output_tests(_) ->
                 \"AttributeType\": \"S\"
             }
         ],
+        \"GlobalSecondaryIndexes\": [
+            {
+                \"IndexName\": \"SubjectIndex\",
+                \"IndexSizeBytes\": 2048,
+                \"IndexStatus\": \"CREATING\",
+                \"ItemCount\": 47,
+                \"KeySchema\": [
+                    {
+                        \"AttributeName\": \"Subject\",
+                        \"KeyType\": \"HASH\"
+                    },
+                    {
+                        \"AttributeName\": \"LastPostDateTime\",
+                        \"KeyType\": \"RANGE\"
+                    }
+                ],
+                \"Projection\": {
+                    \"NonKeyAttributes\" : [
+                        \"Author\"
+                    ],
+                    \"ProjectionType\": \"INCLUDE\"
+                },
+                \"ProvisionedThroughput\": {
+                    \"LastDecreaseDateTime\": 0,
+                    \"LastIncreaseDateTime\": 1,
+                    \"NumberOfDecreasesToday\": 2,
+                    \"ReadCapacityUnits\": 3,
+                    \"WriteCapacityUnits\": 4
+                }
+            }
+        ],          
         \"CreationDateTime\": 1.363801528686E9,
         \"ItemCount\": 0,
         \"KeySchema\": [
@@ -2744,6 +3358,21 @@ update_table_output_tests(_) ->
                        item_count = 0,
                        key_schema = {<<"ForumName">>, <<"LastPostDateTime">>},
                        projection = keys_only}],
+               global_secondary_indexes = 
+                   [#ddb2_global_secondary_index_description{
+                       index_name = <<"SubjectIndex">>,
+                       index_size_bytes = 2048,
+                       index_status = creating,
+                       item_count = 47,
+                       key_schema = {<<"Subject">>, <<"LastPostDateTime">>},
+                       projection = {include, [<<"Author">>]},
+                       provisioned_throughput = #ddb2_provisioned_throughput_description{
+                          last_decrease_date_time = 0,
+                          last_increase_date_time = 1,
+                          number_of_decreases_today = 2,
+                          read_capacity_units = 3,
+                          write_capacity_units = 4}
+                    }],                        
                provisioned_throughput = 
                    #ddb2_provisioned_throughput_description{
                       last_decrease_date_time = undefined,

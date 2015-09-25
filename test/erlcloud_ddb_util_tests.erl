@@ -5,7 +5,7 @@
 -include("erlcloud_ddb.hrl").
 
 %% Unit tests for erlcloud_ddb_util.
-%% These tests work by using meck to mock httpc.
+%% These tests work by using meck to mock erlcloud_httpc.
 %%
 %% Input tests verify that different function args produce the desired JSON request.
 %% An input test list provides a list of funs and the JSON that is expected to result.
@@ -28,15 +28,16 @@ operation_test_() ->
      fun stop/1,
      [fun delete_hash_key_tests/1,
       fun get_all_tests/1,
-      fun q_all_tests/1
+      fun q_all_tests/1,
+      fun scan_all_tests/1
      ]}.
 
 start() ->
-    meck:new(httpc, [unstick]),
+    meck:new(erlcloud_httpc),
     ok.
 
 stop(_) ->
-    meck:unload(httpc).
+    meck:unload(erlcloud_httpc).
 
 %%%===================================================================
 %%% Multi-call test helpers
@@ -47,20 +48,20 @@ stop(_) ->
 -type response_body() :: string().
 -type http_call() :: {expected_body(), response_body()}.
 
-%% returns the mock of the httpc function multi-call tests expect to be called.
+%% returns the mock of the erlcloud_httpc function multi-call tests expect to be called.
 -spec multi_call_expect([http_call(),...]) -> fun().
 multi_call_expect([{Expected, Response} | TCalls]) ->
-    fun(post, {_Url, _Headers, _ContentType, Body}, _HTTPOpts, _Opts) -> 
+    fun(_Url, post, _Headers, Body, _Timeout, _Config) -> 
             erlcloud_ddb2_tests:validate_body(Body, Expected),
             case TCalls of
                 [] ->
                     %% No more calls expected
-                    meck:delete(httpc, request, 4);
+                    meck:delete(erlcloud_httpc, request, 6);
                 _ ->
                     %% Set up the expectation for the next call
-                    meck:expect(httpc, request, multi_call_expect(TCalls))
+                    meck:expect(erlcloud_httpc, request, multi_call_expect(TCalls))
             end,
-            {ok, {{0, 200, 0}, 0, list_to_binary(Response)}} 
+            {ok, {{200, "OK"}, [], list_to_binary(Response)}} 
     end.
     
 
@@ -71,7 +72,7 @@ multi_call_test({Line, {Description, Fun, Calls, Result}}) ->
     {Description,
      {Line,
       fun() ->
-              meck:expect(httpc, request, multi_call_expect(Calls)),
+              meck:expect(erlcloud_httpc, request, multi_call_expect(Calls)),
               erlcloud_ddb:configure(string:copies("A", 20), string:copies("a", 40)),
               Actual = Fun(),
               case Result =:= Actual of
@@ -111,14 +112,14 @@ delete_hash_key_tests(_) ->
 }", "
 {\"Count\":2,
  \"Items\":[
-  {\"rkn\":{\"N\":\"1\"}},
-  {\"rkn\":{\"N\":\"2\"}}]
+  {\"rkn\":{\"B\":\"AQ==\"}},
+  {\"rkn\":{\"B\":\"Ag==\"}}]
 }"
               }, {"
 {\"RequestItems\":{
   \"tn\":[
-   {\"DeleteRequest\":{\"Key\":{\"hkn\":{\"S\":\"hkv\"}, \"rkn\":{\"N\":\"1\"}}}},
-   {\"DeleteRequest\":{\"Key\":{\"hkn\":{\"S\":\"hkv\"}, \"rkn\":{\"N\":\"2\"}}}}]
+   {\"DeleteRequest\":{\"Key\":{\"hkn\":{\"S\":\"hkv\"}, \"rkn\":{\"B\":\"AQ==\"}}}},
+   {\"DeleteRequest\":{\"Key\":{\"hkn\":{\"S\":\"hkv\"}, \"rkn\":{\"B\":\"Ag==\"}}}}]
  }}", "
 {\"Responses\":{
   \"tn\":{\"ConsumedCapacityUnits\":2.0}
@@ -470,6 +471,102 @@ q_all_tests(_) ->
             \"ComparisonOperator\": \"EQ\"
         }
     },
+    \"ExclusiveStartKey\": {
+        \"hkn\": {
+            \"S\": \"hkv\"
+        },
+        \"rkn\": {
+            \"S\": \"rk2\"
+        }
+    }
+}"
+               , "
+{
+    \"Count\": 1,
+    \"Items\": [
+        {
+            \"hkn\": {
+                \"S\": \"hkv\"
+            },
+            \"rkn\": {
+                \"S\": \"rk3\"
+            }
+        }
+    ]
+}"
+              }],
+             {ok, [[{<<"hkn">>, <<"hkv">>}, {<<"rkn">>, <<"rk1">>}],
+                   [{<<"hkn">>, <<"hkv">>}, {<<"rkn">>, <<"rk2">>}],
+                   [{<<"hkn">>, <<"hkv">>}, {<<"rkn">>, <<"rk3">>}]
+                  ]}})
+         ],
+    multi_call_tests(Tests).
+
+scan_all_tests(_) ->
+    Tests =
+        [?_ddb_test(
+            {"scan_all one item",
+             ?_f(erlcloud_ddb_util:scan_all(<<"tn">>)),
+             [{"
+{
+    \"TableName\": \"tn\"
+}"
+               , "
+{
+    \"Count\": 1,
+    \"Items\": [
+        {
+            \"hkn\": {
+                \"S\": \"hkv\"
+            },
+            \"rkn\": {
+                \"S\": \"rkv\"
+            }
+        }
+    ]
+}"
+               }],
+             {ok, [[{<<"hkn">>, <<"hkv">>}, {<<"rkn">>, <<"rkv">>}]]}}),
+         ?_ddb_test(
+            {"scan_all two batches",
+             ?_f(erlcloud_ddb_util:scan_all(<<"tn">>)),
+             [{"
+{
+    \"TableName\": \"tn\"
+}"
+               , "
+{
+    \"Count\": 2,
+    \"Items\": [
+        {
+            \"hkn\": {
+                \"S\": \"hkv\"
+            },
+            \"rkn\": {
+                \"S\": \"rk1\"
+            }
+        },
+        {
+            \"hkn\": {
+                \"S\": \"hkv\"
+            },
+            \"rkn\": {
+                \"S\": \"rk2\"
+            }
+        }
+    ],
+    \"LastEvaluatedKey\": {
+        \"hkn\": {
+            \"S\": \"hkv\"
+        },
+        \"rkn\": {
+            \"S\": \"rk2\"
+        }
+    }
+}"},
+              {"
+{
+    \"TableName\": \"tn\",
     \"ExclusiveStartKey\": {
         \"hkn\": {
             \"S\": \"hkv\"

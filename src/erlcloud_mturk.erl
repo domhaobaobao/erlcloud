@@ -1599,7 +1599,7 @@ mturk_xml_request(Config, Operation, Params) ->
 mturk_request(Config, Operation, Params) ->
     Timestamp = erlcloud_aws:format_timestamp(erlang:universaltime()),
     StringToSign = [?API_SERVICE, Operation, Timestamp],
-    Signature = base64:encode(crypto:hmac(sha, Config#aws_config.secret_access_key, StringToSign)),
+    Signature = base64:encode(erlcloud_util:sha_mac(Config#aws_config.secret_access_key, StringToSign)),
 
     QParams = [{"Operation", Operation}, {"Version", ?API_VERSION},
                {"Service", ?API_SERVICE}, {"Timestamp", Timestamp},
@@ -1608,14 +1608,17 @@ mturk_request(Config, Operation, Params) ->
 
     URL = ["https://", Config#aws_config.mturk_host, "/"],
 
-    Response = httpc:request(post,
-                             {lists:flatten(URL), [], "application/x-www-form-urlencoded",
-                              list_to_binary(erlcloud_http:make_query_string(QParams))}, [], []),
+    Response = erlcloud_httpc:request(
+                 lists:flatten(URL),
+                 post,
+                 [{<<"content-type">>, <<"application/x-www-form-urlencoded">>}],
+                 list_to_binary(erlcloud_http:make_query_string(QParams)),
+                 Config#aws_config.timeout, Config),
 
     case Response of
-        {ok, {{_HTTPVer, 200, _StatusLine}, _Headers, Body}} ->
-            Body;
-        {ok, {{_HTTPVer, Status, _StatusLine}, _Headers, _Body}} ->
+        {ok, {{200, _StatusLine}, _Headers, Body}} ->
+            binary_to_list(Body);
+        {ok, {{Status, _StatusLine}, _Headers, _Body}} ->
             erlang:error({aws_error, {http_error, Status, _StatusLine, _Body}});
         {error, Error} ->
             erlang:error({aws_error, {socket_error, Error}})

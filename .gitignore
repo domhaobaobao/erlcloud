@@ -4,10 +4,19 @@ _build
 ebin/*.beam
 ebin/*.app
 .eunit/
+.rebar/
 rebar
 *.sublime-*
 deps/
+<<<<<<< HEAD
 doc//erlcloud.iml
 /.idea/*
 /.project
 /erlcloud.iml
+=======
+doc/
+erl_crash.dump
+.edts
+*[#]*[#]
+*[#]*
+>>>>>>> gleber/master
